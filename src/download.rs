@@ -1,12 +1,22 @@
 use std::{
-    collections::{HashMap, HashSet}, fs::create_dir_all, path::Path, sync::Arc, time::Instant
+    collections::{HashMap, HashSet},
+    fs::create_dir_all,
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    time::Instant,
 };
 
 use anyhow::anyhow;
 use rayon::ThreadPoolBuilder;
 
 use crate::{
-    download_internals::DropDownloadPipeline, generate_authorization_header, models::{Args, ChunkBody, DownloadBucket, DownloadContext, DownloadDrop, DropManifest, ManifestBody}, AppData, AuthData
+    AppData, AuthData,
+    download_internals::DropDownloadPipeline,
+    generate_authorization_header,
+    models::{Args, ChunkBody, DownloadBucket, DownloadContext, DownloadDrop, DropManifest, ManifestBody},
 };
 
 static RETRY_COUNT: usize = 3;
@@ -91,16 +101,14 @@ pub fn generate_buckets(game_id: String, install_dir: &str, manifest: &DropManif
 
 pub fn download(game_id: String, buckets: Vec<DownloadBucket>, app_data: &AppData, args: &Args) {
     let auth = app_data.auth.as_ref().expect("requires auth");
-    let pool = ThreadPoolBuilder::new().num_threads(args.threads).build().expect("failed to create pool thread");
+    let threads = args.threads;
+    let pool = ThreadPoolBuilder::new().num_threads(threads).build().expect("failed to create pool thread");
 
-    println!("starting download with {} threads", args.threads);
+    println!("starting download with {} threads", threads);
 
     let mut download_contexts = HashMap::<String, DownloadContext>::new();
     let versions = buckets.iter().map(|e| &e.version).collect::<HashSet<_>>().into_iter().cloned().collect::<Vec<String>>();
-
-    let completed_contexts = Arc::new(boxcar::Vec::new());
-    let completed_indexes_loop_arc = completed_contexts.clone();
-
+    
     let client = reqwest::blocking::Client::new();
 
     for version in versions {
@@ -130,28 +138,20 @@ pub fn download(game_id: String, buckets: Vec<DownloadBucket>, app_data: &AppDat
 
     pool.scope(|scope| {
         for (index, bucket) in buckets.iter().enumerate() {
-            let completed_contexts = completed_indexes_loop_arc.clone();
-
             let download_context = download_contexts.get(&bucket.version).expect("failed to find download context for version - did we generate them all?");
 
             scope.spawn(move |_| {
                 let start = Instant::now();
-                // 3 attempts
-                for _ in 0..RETRY_COUNT {
-                    match download_game_bucket(&bucket, download_context, auth, client_ref) {
-                        Ok(()) => {
-                            for drop in &bucket.drops {
-                                completed_contexts.push(drop.checksum.clone());
-                            }
-                            let time = start.elapsed().as_secs_f64();
-                            let size = bucket.drops.iter().map(|v| v.length).sum::<usize>() / (1000 * 1000);
-                            let speed = (size as f64) / time;
-                            println!("{index}/{} - {speed:.2}MB/s", buckets_len);
-                            return;
-                        }
-                        Err(e) => {
-                            panic!("failed to download: {e:?}");
-                        }
+                match download_game_bucket(&bucket, download_context, auth, client_ref) {
+                    Ok(()) => {
+                        let time = start.elapsed().as_secs_f64();
+                        let size = bucket.drops.iter().map(|v| v.length).sum::<usize>() / (1000 * 1000);
+                        let speed = (size as f64) / time;
+                        println!("{index}/{} - {speed:.2}MB/s - {:.2}MB/s estimated", buckets_len, speed * threads as f64);
+                        return;
+                    }
+                    Err(e) => {
+                        panic!("failed to download: {e:?}");
                     }
                 }
             });
@@ -186,8 +186,7 @@ fn download_game_bucket(bucket: &DownloadBucket, context: &DownloadContext, auth
 
     let _completed = pipeline.copy()?;
 
-    let checksums = pipeline
-        .finish()?;
+    let checksums = pipeline.finish()?;
 
     for (index, drop) in bucket.drops.iter().enumerate() {
         let res = hex::encode(**checksums.get(index).unwrap());
@@ -197,7 +196,6 @@ fn download_game_bucket(bucket: &DownloadBucket, context: &DownloadContext, auth
             // return Err(ApplicationDownloadError::Checksum);
         }
     }
-
 
     Ok(())
 }

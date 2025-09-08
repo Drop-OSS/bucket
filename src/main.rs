@@ -192,6 +192,9 @@ fn main() {
     let mut app_data = read_app_data();
 
     while app_data.auth.is_none() {
+        if args.silent {
+            panic!("silent mode enabled but interactive auth required");
+        }
         do_auth(&mut app_data);
     }
     save_app_data(&app_data);
