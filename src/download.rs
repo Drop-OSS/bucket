@@ -6,7 +6,7 @@ use anyhow::anyhow;
 use rayon::ThreadPoolBuilder;
 
 use crate::{
-    download_internals::DropDownloadPipeline, generate_authorization_header, models::{ChunkBody, DownloadBucket, DownloadContext, DownloadDrop, DropManifest, ManifestBody}, AppData, AuthData
+    download_internals::DropDownloadPipeline, generate_authorization_header, models::{Args, ChunkBody, DownloadBucket, DownloadContext, DownloadDrop, DropManifest, ManifestBody}, AppData, AuthData
 };
 
 static RETRY_COUNT: usize = 3;
@@ -89,9 +89,11 @@ pub fn generate_buckets(game_id: String, install_dir: &str, manifest: &DropManif
     return buckets;
 }
 
-pub fn download(game_id: String, buckets: Vec<DownloadBucket>, app_data: &AppData) {
+pub fn download(game_id: String, buckets: Vec<DownloadBucket>, app_data: &AppData, args: &Args) {
     let auth = app_data.auth.as_ref().expect("requires auth");
-    let pool = ThreadPoolBuilder::new().num_threads(4).build().expect("failed to create pool thread");
+    let pool = ThreadPoolBuilder::new().num_threads(args.threads).build().expect("failed to create pool thread");
+
+    println!("starting download with {} threads", args.threads);
 
     let mut download_contexts = HashMap::<String, DownloadContext>::new();
     let versions = buckets.iter().map(|e| &e.version).collect::<HashSet<_>>().into_iter().cloned().collect::<Vec<String>>();
@@ -124,8 +126,10 @@ pub fn download(game_id: String, buckets: Vec<DownloadBucket>, app_data: &AppDat
 
     let client_ref = &client;
 
+    let buckets_len = buckets.len();
+
     pool.scope(|scope| {
-        for (_index, bucket) in buckets.iter().enumerate() {
+        for (index, bucket) in buckets.iter().enumerate() {
             let completed_contexts = completed_indexes_loop_arc.clone();
 
             let download_context = download_contexts.get(&bucket.version).expect("failed to find download context for version - did we generate them all?");
@@ -142,7 +146,7 @@ pub fn download(game_id: String, buckets: Vec<DownloadBucket>, app_data: &AppDat
                             let time = start.elapsed().as_secs_f64();
                             let size = bucket.drops.iter().map(|v| v.length).sum::<usize>() / (1000 * 1000);
                             let speed = (size as f64) / time;
-                            println!("finished chunk with speed of {speed}MB/s");
+                            println!("{index}/{} - {speed:.2}MB/s", buckets_len);
                             return;
                         }
                         Err(e) => {

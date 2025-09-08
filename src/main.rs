@@ -209,5 +209,5 @@ fn main() {
     println!("generated {} buckets", buckets.len());
 
     println!("downloading game...");
-    download(params.0, buckets, &app_data);
+    download(params.0, buckets, &app_data, &args);
 }

@@ -68,6 +68,9 @@ pub struct Args {
 
     #[arg(long, short)]
     pub silent: bool,
+
+    #[arg(long, short, default_value_t = 4)]
+    pub threads: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
